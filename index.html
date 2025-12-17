@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AIoT 課堂體驗 (GitHub版)</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #121212;
+            color: white;
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            text-align: center;
+        }
+
+        header {
+            width: 100%;
+            padding: 15px 0;
+            background: #1f1f1f;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+            margin-bottom: 20px;
+        }
+
+        h1 { margin: 0; font-size: 1.2rem; color: #4cc9f0; }
+
+        #camera-container {
+            position: relative;
+            width: 85vw; /* 寬度佔螢幕 85% */
+            height: 85vw; /* 正方形 */
+            max-width: 400px;
+            max-height: 400px;
+            margin: 0 auto;
+            border-radius: 20px;
+            overflow: hidden;
+            border: 4px solid #333;
+            background: #000;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* 影片元素樣式 */
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* 鏡像翻轉 */
+        }
+
+        /* 結果顯示區 */
+        #result-panel {
+            margin-top: 20px;
+            width: 90%;
+            max-width: 400px;
+        }
+
+        #status-icon {
+            font-size: 4rem;
+            margin-bottom: 10px;
+            display: block;
+            text-shadow: 0 0 20px rgba(255,255,255,0.2);
+            transition: transform 0.2s;
+        }
+
+        #class-name {
+            font-size: 2rem;
+            font-weight: bold;
+            margin: 5px 0;
+            min-height: 1.2em;
+        }
+
+        #confidence {
+            font-size: 1rem;
+            color: #888;
+        }
+
+        /* 按鈕 */
+        .btn-start {
+            padding: 15px 50px;
+            font-size: 1.5rem;
+            background: linear-gradient(135deg, #4cc9f0, #4895ef);
+            border: none;
+            border-radius: 50px;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 100px;
+            box-shadow: 0 4px 15px rgba(76, 201, 240, 0.4);
+        }
+
+        /* 狀態樣式 */
+        .state-normal { color: #2ecc71; }
+        .state-alert { color: #e74c3c; animation: shake 0.5s infinite; }
+        
+        @keyframes shake {
+            0% { transform: translate(1px, 1px) rotate(0deg); }
+            10% { transform: translate(-1px, -2px) rotate(-1deg); }
+            20% { transform: translate(-3px, 0px) rotate(1deg); }
+            30% { transform: translate(3px, 2px) rotate(0deg); }
+            40% { transform: translate(1px, -1px) rotate(1deg); }
+            50% { transform: translate(-1px, 2px) rotate(-1deg); }
+            60% { transform: translate(-3px, 1px) rotate(0deg); }
+            70% { transform: translate(3px, 1px) rotate(-1deg); }
+            80% { transform: translate(-1px, -1px) rotate(1deg); }
+            90% { transform: translate(1px, 2px) rotate(0deg); }
+            100% { transform: translate(1px, -2px) rotate(-1deg); }
+        }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <!-- 1. 歡迎畫面 -->
+    <div id="start-screen">
+        <div style="margin-top: 50px;">
+            <div style="font-size: 4rem;">🤖</div>
+            <h1 style="font-size: 2rem; margin-top: 20px;">AIoT 體驗</h1>
+            <p style="color: #aaa; margin-top: 10px;">請確保使用 Safari 或 Chrome<br>並允許相機權限</p>
+        </div>
+        <button class="btn-start" onclick="init()">啟動相機</button>
+    </div>
+
+    <!-- 2. 主程式畫面 -->
+    <div id="app-screen" class="hidden">
+        <header>
+            <h1>課堂實作 Demo</h1>
+        </header>
+
+        <div id="camera-container">
+            <!-- 這裡會自動插入 Video 畫面 -->
+        </div>
+
+        <div id="result-panel">
+            <span id="status-icon">⚪</span>
+            <div id="class-name">準備中...</div>
+            <div id="confidence">信心指數: 0%</div>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 您的模型網址 (已預填)
+        // ==========================================
+        const URL = "https://teachablemachine.withgoogle.com/models/FjqtNCUut/"; 
+        // ==========================================
+
+        let model, maxPredictions;
+        let videoElement;
+        let isRunning = false;
+        let lastVibrate = 0;
+
+        async function init() {
+            // 切換 UI
+            document.getElementById('start-screen').classList.add('hidden');
+            document.getElementById('app-screen').classList.remove('hidden');
+
+            try {
+                // 1. 載入模型
+                const modelURL = URL + "model.json";
+                const metadataURL = URL + "metadata.json";
+                
+                document.getElementById('class-name').innerText = "下載模型中...";
+                model = await tmImage.load(modelURL, metadataURL);
+                maxPredictions = model.getTotalClasses();
+
+                // 2. 設定相機 (原生寫法，相容性最高)
+                document.getElementById('class-name').innerText = "啟動相機...";
+                
+                // 設定參數：優先使用前鏡頭
+                const constraints = {
+                    audio: false,
+                    video: { facingMode: "user" }
+                };
+
+                let stream;
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia(constraints);
+                } catch (e) {
+                    // 如果失敗，嘗試不指定鏡頭 (相容舊裝置)
+                    stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                }
+
+                // 建立 Video 元素
+                videoElement = document.createElement('video');
+                videoElement.setAttribute('playsinline', ''); // iOS 關鍵
+                videoElement.setAttribute('autoplay', '');
+                videoElement.setAttribute('muted', '');
+                videoElement.srcObject = stream;
+
+                // 等待串流載入
+                await new Promise((resolve) => {
+                    videoElement.onloadedmetadata = () => {
+                        videoElement.play();
+                        resolve();
+                    };
+                });
+
+                // 將 Video 放進畫面
+                document.getElementById("camera-container").appendChild(videoElement);
+                
+                // 開始迴圈
+                isRunning = true;
+                requestAnimationFrame(loop);
+
+            } catch (error) {
+                alert("啟動失敗！\n請檢查：\n1. 是否使用 Safari/Chrome？\n2. 是否允許相機權限？\n\n錯誤訊息：" + error.message);
+                location.reload();
+            }
+        }
+
+        async function loop() {
+            if (isRunning) {
+                await predict();
+                requestAnimationFrame(loop);
+            }
+        }
+
+        async function predict() {
+            if (!model || !videoElement) return;
+
+            // 預測
+            const prediction = await model.predict(videoElement);
+            
+            // 找出最高分的類別
+            let bestClass = "";
+            let highestProb = 0;
+            for (let i = 0; i < maxPredictions; i++) {
+                if (prediction[i].probability > highestProb) {
+                    highestProb = prediction[i].probability;
+                    bestClass = prediction[i].className;
+                }
+            }
+
+            // 更新畫面
+            const icon = document.getElementById('status-icon');
+            const name = document.getElementById('class-name');
+            const conf = document.getElementById('confidence');
+
+            name.innerText = bestClass;
+            conf.innerText = `信心指數: ${(highestProb * 100).toFixed(0)}%`;
+
+            // 邏輯判斷 (門檻值 0.8)
+            if (highestProb > 0.8) {
+                // Class 1 (通常是正常/安全)
+                if (prediction[0].probability > 0.8) {
+                    icon.innerText = "🛡️";
+                    name.style.color = "#2ecc71"; // 綠色
+                    icon.className = ""; // 停止震動動畫
+                } 
+                // Class 2 (通常是觸發/警報)
+                else if (prediction[1] && prediction[1].probability > 0.8) {
+                    icon.innerText = "🚨";
+                    name.style.color = "#e74c3c"; // 紅色
+                    icon.className = "state-alert"; // 開啟震動動畫
+
+                    // 手機震動回饋 (IoT 效果)
+                    const now = Date.now();
+                    if (now - lastVibrate > 1000) { // 冷卻時間 1秒
+                        if (navigator.vibrate) navigator.vibrate(200);
+                        lastVibrate = now;
+                    }
+                }
+            } else {
+                icon.innerText = "🤔";
+                name.style.color = "white";
+                icon.className = "";
+            }
+        }
+    </script>
+</body>
+</html>
